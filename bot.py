@@ -1,41 +1,41 @@
+import os
 import discord
 from discord.ext import commands
-import json
-import os
-from keep_alive import keep_alive  # Keeps bot alive on Render
+from keep_alive import keep_alive  # Keeps the bot alive on Render
 
-# Start the keep_alive web server
-keep_alive()
-
-# Set up the bot with intents
+# Enable intents
 intents = discord.Intents.default()
+intents.message_content = True
 intents.members = True
-intents.message_content = True  # Required for reading messages in new Discord API versions
 
+# Create the bot client
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Load nickname channel data from file
-try:
-    with open("nick_channels.json", "r") as f:
-        nick_channels = json.load(f)
-except FileNotFoundError:
-    nick_channels = {}
-
-# Event: Bot is ready
+# Event when bot is ready
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user}")
-    print("Bot is ready and running!")
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    print("Bot is online and running successfully.")
 
-# Command: Set the nickname channel
+# Test command to confirm the bot is active
 @bot.command()
-@commands.has_permissions(manage_guild=True)
-async def setnickchannel(ctx, channel: discord.TextChannel):
-    """Set the channel where nickname changes are allowed."""
-    nick_channels[str(ctx.guild.id)] = channel.id
-    with open("nick_channels.json", "w") as f:
-        json.dump(nick_channels, f, indent=4)
-    await ctx.send(f"Nickname change channel set to {channel.mention}")
+async def ping(ctx):
+    await ctx.send("Pong! The bot is active and responding.")
 
-# Command:
+# Command to set nickname channel (example placeholder)
+@bot.command()
+async def setnickchannel(ctx):
+    await ctx.send("This command will let you set a nickname channel in the future.")
+
+# Start the keep_alive web server (so Render stays awake)
+keep_alive()
+
+# Get the Discord bot token from Render environment variables
+token = os.getenv("DISCORD_TOKEN")
+
+# Run the bot
+if token:
+    bot.run(token)
+else:
+    print("ERROR: No Discord token found. Please check your Render environment settings.")
 
