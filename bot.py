@@ -1,70 +1,65 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
 import json
 import os
-import os
+from keep_alive import keep_alive  # keeps bot alive on Render
 
-TOKEN = os.getenv("TOKEN")
-DATA_FILE = "nick_channels.json"
+# Load nickname channel data
+try:
+    with open("nick_channels.json", "r") as f:
+        nick_channels = json.load(f)
+except FileNotFoundError:
+    nick_channels = {}
 
+# Set up bot intents
 intents = discord.Intents.default()
+intents.messages = True
 intents.message_content = True
 intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Load or create nickname channel data
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r") as f:
-        nick_channels = json.load(f)
-else:
-    nick_channels = {}
-
-def save_data():
-    with open(DATA_FILE, "w") as f:
-        json.dump(nick_channels, f, indent=4)
-
 @bot.event
 async def on_ready():
-    await bot.tree.sync()
     print(f"✅ Logged in as {bot.user}")
-    print(f"Slash commands synced successfully!")
+    print("✅ Slash commands synced successfully!")
 
-# --- Slash command to set nickname channel ---
-@bot.tree.command(name="setnickchannel", description="Set the channel where nickname changes happen.")
-@app_commands.checks.has_permissions(administrator=True)
+@bot.tree.command(name="setnickchannel", description="Set the channel where nickname messages will be read.")
 async def setnickchannel(interaction: discord.Interaction, channel: discord.TextChannel):
-    nick_channels[str(interaction.guild_id)] = channel.id
-    save_data()
+    guild_id = str(interaction.guild.id)
+    nick_channels[guild_id] = channel.id
+
+    with open("nick_channels.json", "w") as f:
+        json.dump(nick_channels, f, indent=4)
+
     await interaction.response.send_message(f"✅ Nickname channel set to {channel.mention}", ephemeral=True)
 
-
-@setnickchannel.error
-async def setnickchannel_error(interaction: discord.Interaction, error):
-    if isinstance(error, app_commands.errors.MissingPermissions):
-        await interaction.response.send_message("❌ You need to be an administrator to use this command.", ephemeral=True)
-
-# --- Listen for messages in the nickname channel ---
 @bot.event
 async def on_message(message):
-    if message.author.bot or not message.guild:
+    if message.author.bot:
         return
 
     guild_id = str(message.guild.id)
     if guild_id in nick_channels and message.channel.id == nick_channels[guild_id]:
-        new_nick = message.content.strip()
-        if new_nick:
-            try:
-                await message.author.edit(nick=new_nick)
-                await message.delete()
-                print(f"Changed {message.author} nickname to '{new_nick}'")
-            except discord.Forbidden:
-                await message.channel.send("❌ I don't have permission to change nicknames.", delete_after=5)
-            except Exception as e:
-                print(f"Error changing nickname: {e}")
-    else:
-        await bot.process_commands(message)
+        try:
+            await message.author.edit(nick=message.content[:32])
+            await message.delete()
+        except discord.Forbidden:
+            await message.channel.send("❌ I don’t have permission to change that nickname.")
+        except Exception as e:
+            print(f"Error: {e}")
 
-bot.run(TOKEN)
+    await bot.process_commands(message)
+
+# Start the small web server to keep Render alive
+keep_alive()
+
+# Run the bot using Render’s environment variable
+TOKEN = os.getenv("TOKEN")
+
+if not TOKEN:
+    print("❌ No TOKEN found! Please set it in Render Environment settings.")
+else:
+    bot.run(TOKEN)
+
