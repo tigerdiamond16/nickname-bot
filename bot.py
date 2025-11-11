@@ -1,131 +1,73 @@
-import os
-import json
 import discord
 from discord.ext import commands
-from datetime import datetime
+from discord import app_commands
+import json
+import os
 from keep_alive import keep_alive
 
-# ===== INTENTS =====
+# Intents
 intents = discord.Intents.default()
-intents.message_content = True
+intents.guilds = True
 intents.members = True
+intents.messages = True
+intents.message_content = True
 
-# Create bot with slash command support
-bot = discord.Bot(intents=intents)
+# Bot setup
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== SETTINGS =====
-ALLOWED_CHANNEL_NAME = "in-city-name-id"  # change this to your nickname input channel name
-CONFIG_FILE = "config.json"  # stores the log channel ID
+# Load saved log and nickname channels
+try:
+    with open("nick_channels.json", "r") as f:
+        nick_channels = json.load(f)
+except FileNotFoundError:
+    nick_channels = {}
 
-# ===== LOAD CONFIG =====
-if os.path.exists(CONFIG_FILE):
-    with open(CONFIG_FILE, "r") as f:
-        config = json.load(f)
-else:
-    config = {"log_channel_id": None}
+log_channels = {}
 
-
-# ===== HELPER FUNCTION =====
-async def send_log_embed(guild, user, old_nick, new_nick):
-    """Send a formatted embed to the log channel."""
-    log_channel_id = config.get("log_channel_id")
-    if not log_channel_id:
-        return  # No log channel set yet
-
-    log_channel = guild.get_channel(log_channel_id)
-    if not log_channel:
-        return  # Channel not found or deleted
-
-    embed = discord.Embed(
-        title="Nickname Changed",
-        color=discord.Color.blurple(),
-        timestamp=datetime.now()
-    )
-    embed.add_field(name="User", value=f"{user.mention} ({user})", inline=False)
-    embed.add_field(name="Old Nickname", value=old_nick or "None", inline=True)
-    embed.add_field(name="New Nickname", value=new_nick or "None", inline=True)
-    embed.set_footer(text=f"User ID: {user.id}")
-
-    try:
-        await log_channel.send(embed=embed)
-    except Exception as e:
-        print(f"Failed to send log embed: {e}")
-
-
-# ===== SLASH COMMANDS =====
-@bot.slash_command(name="setlogchannel", description="Set the channel where nickname logs will be sent.")
-@discord.default_permissions(manage_guild=True)
-async def setlogchannel(ctx, channel: discord.TextChannel):
-    """Allows admins to set the nickname log channel."""
-    config["log_channel_id"] = channel.id
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=4)
-
-    await ctx.respond(f"Log channel has been set to {channel.mention}")
-    print(f"✅ Log channel set to {channel.name} in guild {ctx.guild.name}")
-
-
-@bot.slash_command(name="showlogchannel", description="Show the current log channel for nickname updates.")
-async def showlogchannel(ctx):
-    """Displays which log channel is currently set."""
-    log_channel_id = config.get("log_channel_id")
-    if log_channel_id:
-        channel = ctx.guild.get_channel(log_channel_id)
-        if channel:
-            await ctx.respond(f"Current log channel: {channel.mention}")
-            return
-    await ctx.respond("No log channel has been set yet. Use `/setlogchannel` to set one.")
-
-
-# ===== EVENTS =====
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
-    print("Bot is running and ready to change nicknames and send logs!")
+    print(f"Bot connected as {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} slash commands.")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
 
+# Slash command to set nickname channel
+@bot.tree.command(name="setnickchannel", description="Set the channel for nickname changes.")
+@app_commands.checks.has_permissions(administrator=True)
+async def setnickchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    nick_channels[str(interaction.guild_id)] = channel.id
+    with open("nick_channels.json", "w") as f:
+        json.dump(nick_channels, f, indent=4)
+    await interaction.response.send_message(f"Nickname channel set to {channel.mention}", ephemeral=True)
 
+# Slash command to set log channel
+@bot.tree.command(name="setlogchannel", description="Set the channel where nickname change logs will be sent.")
+@app_commands.checks.has_permissions(administrator=True)
+async def setlogchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    log_channels[str(interaction.guild_id)] = channel.id
+    await interaction.response.send_message(f"Log channel set to {channel.mention}", ephemeral=True)
+
+# Detect messages in nickname channel
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
+    if message.author.bot:
         return
 
-    if message.channel.name == ALLOWED_CHANNEL_NAME:
-        nickname = message.content.strip()
-        if not nickname:
-            return
-
+    guild_id = str(message.guild.id)
+    if guild_id in nick_channels and message.channel.id == nick_channels[guild_id]:
         try:
-            old_nick = message.author.display_name
-            await message.author.edit(nick=nickname)
-            await message.delete()
+            await message.author.edit(nick=message.content[:32])
+            await message.channel.send(f"Nickname updated to: {message.content}", delete_after=5)
 
-            confirmation = await message.channel.send(
-                f"Nickname for {old_nick} changed to '{nickname}'."
-            )
-            await confirmation.delete(delay=3)
-
-            await send_log_embed(message.guild, message.author, old_nick, nickname)
-            print(f"Changed nickname for {message.author} to '{nickname}' and logged it.")
+            if guild_id in log_channels:
+                log_channel = bot.get_channel(log_channels[guild_id])
+                if log_channel:
+                    await log_channel.send(f"{message.author} changed nickname to: {message.content}")
 
         except discord.Forbidden:
-            await message.channel.send(
-                f"I don't have permission to change nicknames for {message.author.mention}.",
-                delete_after=5
-            )
-        except Exception as e:
-            await message.channel.send(
-                f"Error changing nickname for {message.author.mention}: {e}",
-                delete_after=5
-            )
+            await message.channel.send("I don't have permission to change that nickname.", delete_after=5)
 
-
-# ===== KEEP ALIVE =====
 keep_alive()
-
-# ===== RUN BOT =====
-token = os.getenv("DISCORD_TOKEN")
-if token:
-    bot.run(token)
-else:
-    print("ERROR: Discord token not found in environment variables.")
-
+bot.run(os.getenv("DISCORD_TOKEN"))
