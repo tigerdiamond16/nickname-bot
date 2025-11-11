@@ -1,96 +1,92 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import json
 import os
 from keep_alive import keep_alive
 
-# Intents
 intents = discord.Intents.default()
+intents.message_content = True
 intents.guilds = True
 intents.members = True
-intents.messages = True
-intents.message_content = True
 
-# Bot setup
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Load nickname and log channel data
-try:
-    with open("nick_channels.json", "r") as f:
-        data = json.load(f)
-        nick_channels = data.get("nick_channels", {})
-        log_channels = data.get("log_channels", {})
-except FileNotFoundError:
-    nick_channels = {}
-    log_channels = {}
+NICK_CHANNELS_FILE = "nick_channels.json"
+LOG_CHANNELS_FILE = "log_channels.json"
 
-# --- Events ---
+# ------------------- Load Saved Channels -------------------
+
+def load_json(filename):
+    if os.path.exists(filename):
+        with open(filename, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_json(filename, data):
+    with open(filename, "w") as f:
+        json.dump(data, f, indent=4)
+
+nick_channels = load_json(NICK_CHANNELS_FILE)
+log_channels = load_json(LOG_CHANNELS_FILE)
+
+# ------------------- Slash Commands -------------------
+
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    print("Bot is ready to receive nickname messages.")
+    await bot.tree.sync()
+    print(f"✅ Logged in as {bot.user}")
 
+@bot.tree.command(name="setnickchannel", description="Set the channel where users can change their nicknames")
+async def set_nick_channel(interaction: discord.Interaction):
+    nick_channels[str(interaction.guild.id)] = interaction.channel.id
+    save_json(NICK_CHANNELS_FILE, nick_channels)
+    await interaction.response.send_message(
+        f"✅ Nickname change channel set to {interaction.channel.mention}", ephemeral=True
+    )
 
-# --- Commands ---
+@bot.tree.command(name="setlogchannel", description="Set the channel for nickname change logs")
+async def set_log_channel(interaction: discord.Interaction):
+    log_channels[str(interaction.guild.id)] = interaction.channel.id
+    save_json(LOG_CHANNELS_FILE, log_channels)
+    await interaction.response.send_message(
+        f"✅ Log channel set to {interaction.channel.mention}", ephemeral=True
+    )
 
-@bot.command(name="setnickchannel")
-@commands.has_permissions(administrator=True)
-async def setnickchannel(ctx, channel: discord.TextChannel):
-    """Sets the nickname input channel."""
-    nick_channels[str(ctx.guild.id)] = channel.id
-    save_channels()
-    await ctx.send(f"✅ Nickname channel set to {channel.mention}")
+# ------------------- Nickname Handler -------------------
 
-
-@bot.command(name="setlogchannel")
-@commands.has_permissions(administrator=True)
-async def setlogchannel(ctx, channel: discord.TextChannel):
-    """Sets the channel where nickname change logs will be sent."""
-    log_channels[str(ctx.guild.id)] = channel.id
-    save_channels()
-    await ctx.send(f"✅ Log channel set to {channel.mention}")
-
-
-def save_channels():
-    """Saves the nickname and log channel data."""
-    with open("nick_channels.json", "w") as f:
-        json.dump({
-            "nick_channels": nick_channels,
-            "log_channels": log_channels
-        }, f, indent=4)
-
-
-# --- Nickname handling ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
 
     guild_id = str(message.guild.id)
+    if guild_id not in nick_channels:
+        return
 
-    # Check if the message is in the nickname channel
-    if guild_id in nick_channels and message.channel.id == nick_channels[guild_id]:
+    if message.channel.id == nick_channels[guild_id]:
+        new_nick = message.content.strip()
+
         try:
-            new_nick = message.content.strip()
             await message.author.edit(nick=new_nick)
-            await message.channel.send(f"✅ Nickname changed to: {new_nick}", delete_after=5)
+            await message.channel.send(f"{message.author.mention}'s nickname was changed to **{new_nick}**")
 
-            # Log nickname change
+            # Log if log channel is set
             if guild_id in log_channels:
                 log_channel = bot.get_channel(log_channels[guild_id])
                 if log_channel:
-                    await log_channel.send(f"🔔 {message.author} changed nickname to: `{new_nick}`")
+                    await log_channel.send(f"📝 **{message.author}** changed nickname to **{new_nick}**")
 
         except discord.Forbidden:
-            await message.channel.send("⚠️ I don't have permission to change that nickname.", delete_after=5)
+            await message.channel.send("❌ I don’t have permission to change your nickname.")
         except Exception as e:
-            await message.channel.send(f"⚠️ An error occurred: {e}", delete_after=5)
+            await message.channel.send(f"⚠️ Error: {e}")
 
-    await bot.process_commands(message)
+# ------------------- Keep Alive for Render -------------------
 
-
-# Keep-alive (Render ping)
 keep_alive()
 
-# Run the bot
+# ------------------- Run Bot -------------------
+
 bot.run(os.getenv("DISCORD_TOKEN"))
+
